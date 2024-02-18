@@ -47,7 +47,6 @@ enum TP {
 }
 
 mod bpf;
-mod defer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -117,7 +116,7 @@ fn release(attached: &Vec<(u32, String)>, fd: RawFd, mode: u32) {
 
 use libbpf_rs::skel::{OpenSkel, SkelBuilder};
 use libbpf_rs::RingBufferBuilder;
-use libbpf_sys::XDP_FLAGS_DRV_MODE;
+use libbpf_sys::{XDP_FLAGS_DRV_MODE, XDP_FLAGS_SKB_MODE};
 use netlink_packet_route::rtnl::link::nlas::Nla;
 
 async fn filter_iface(iface: &str) -> Result<Vec<(u32, String)>> {
@@ -163,6 +162,16 @@ struct Event {
     daddr: IpAddr,
 }
 
+impl Event {
+    fn eth(&self) -> String {
+        match self.eth_proto {
+            0x0800 => String::from("IPV4"),
+            0x86DD => String::from("IPV6"),
+            _ => self.eth_proto.to_string(),
+        }
+    }
+}
+
 impl std::fmt::Display for IpAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         unsafe {
@@ -199,7 +208,12 @@ fn handle_event(data: &[u8]) -> i32 {
 
     let event = unsafe { &*(data.as_ptr() as *const Event) };
 
-    println!("src: {}\tdst: {}\t", event.saddr, event.daddr);
+    println!(
+        "{}\t {}\t > {}\t",
+        event.eth(),
+        event.saddr,
+        event.daddr
+    );
 
     0
 }

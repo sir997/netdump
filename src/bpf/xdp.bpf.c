@@ -4,8 +4,14 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
+// 以太网帧 |目的地址:6|源地址:6|类型:2|数据:46-1500|CRC|
+
 #define ETH_P_IP 0x0800
 #define ETH_P_IPV6 0x86DD
+// ARP 请求/应答
+#define ETH_P_ARP 0x0806
+// RARP 请求/应答
+#define ETH_P_RARP 0x0835
 
 struct
 {
@@ -38,32 +44,44 @@ int xdp_pass(struct xdp_md *ctx)
     struct ethhdr *eth = data;
 
     if (data + sizeof(struct ethhdr) > data_end)
-        return XDP_ABORTED;
+    {
+        bpf_printk("eth pass");
+        return XDP_PASS;
+    }
 
     struct iphdr *ip;
     struct ipv6hdr *ipv6;
 
-    // union ipaddr saddr;
-    // union ipaddr daddr;
-
-    struct event *e = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
-    if (!e)
-        return XDP_PASS;
+    struct event *e;
 
     switch (bpf_ntohs(eth->h_proto))
     {
     case ETH_P_IP:
-        ip = eth + sizeof(*eth);
-        if (ip + sizeof(*ip) > data_end)
-            break;
+        ip = (u64)eth + sizeof(*eth);
+        if ((u64)ip + sizeof(*ip) > data_end)
+        {
+            bpf_printk("ip pass");
+            return XDP_PASS;
+        }
 
-        e->saddr.ipv4 = bpf_ntohs(ip->saddr);
-        e->daddr.ipv4 = bpf_ntohs(ip->daddr);
+        e = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+        if (!e)
+        {
+            bpf_printk("event pass");
+            return XDP_PASS;
+        }
+
+        e->saddr.ipv4 = bpf_ntohl(ip->saddr);
+        e->daddr.ipv4 = bpf_ntohl(ip->daddr);
         break;
     case ETH_P_IPV6:
-        ipv6 = eth + sizeof(*eth);
-        if (ipv6 + sizeof(*ipv6) > data_end)
-            break;
+        ipv6 = (u64)eth + sizeof(*eth);
+        if ((u64)ipv6 + sizeof(*ipv6) > data_end)
+            return XDP_PASS;
+
+        e = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+        if (!e)
+            return XDP_PASS;
 
         for (int i = 0; i < 4; i++)
         {
@@ -72,12 +90,9 @@ int xdp_pass(struct xdp_md *ctx)
         }
         break;
     default:
-        // return XDP_PASS;
-        break;
+        bpf_printk("proto: %d pass", bpf_ntohs(eth->h_proto));
+        return XDP_PASS;
     }
-
-    // e->saddr = saddr;
-    // e->daddr = daddr;
 
     e->eth_proto = bpf_ntohs(eth->h_proto);
     e->timestamp = bpf_ktime_get_ns();
